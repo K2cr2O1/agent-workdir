@@ -1,0 +1,16 @@
+5dd3b3ae5712dbe934562ea5e146b2171149a9826ebecb8efa45b1af040ebcdd  ./conf/classicui.conf
+0a3ba9da930badca4e24cea28bc7eeb199fd0160410939067422f1bd11dd0f1c  ./conf/notifications.conf
+9c748d626333e7bb4008e40a3a47bea9ab006c4f16585840bb50da48ff12ec27  ./conf/waylandim.conf
+70df35d98a6d23f6b386923f0a54df38d79246ffe9716b83a297e085001ffb97  ./themes/default/arrow.png
+70df35d98a6d23f6b386923f0a54df38d79246ffe9716b83a297e085001ffb97  ./themes/default-dark/arrow.png
+8091021e969915ae3eb8070071821936098a7fd3bafe7757af42f76ab66c2192  ./themes/default-dark/next.png
+f84a9d124e5140ed6ce7fa98fb3c27a1d8dec77f9edf0a89c55e3a1709b6b383  ./themes/default-dark/prev.png
+838fc0c614e48123accab12508f17d2c457a53536aed7cfed9456558385bd12c  ./themes/default-dark/radio.png
+76d11577df92fdd17d3f5d664eddcc5fd3d1e763763f60237e01dcf50a915568  ./themes/default-dark/theme.conf
+8091021e969915ae3eb8070071821936098a7fd3bafe7757af42f76ab66c2192  ./themes/default/next.png
+f84a9d124e5140ed6ce7fa98fb3c27a1d8dec77f9edf0a89c55e3a1709b6b383  ./themes/default/prev.png
+838fc0c614e48123accab12508f17d2c457a53536aed7cfed9456558385bd12c  ./themes/default/radio.png
+d574525c64d8fd89283649cbb364c47c62adcf77a3fa4aadfa1f4f5c95812a44  ./themes/default/theme.conf
+f579b6ba7abfaee6f115c1e657ea721fe2a79b39c5e6d152ab868b4803191e1d  ./themes/OriDark/highlight.svg
+1cf01ff893c1b00a62852ff7d3bb38ca524c322e1a39bed59c5e5de0a179c6d1  ./themes/OriDark/panel.svg
+210375ceec1f19f807aa178145d99a3030c555ac20b0848ea16ea8237e114577  ./themes/OriDark/theme.conf
