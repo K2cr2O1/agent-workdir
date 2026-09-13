@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 #
 # mcstudio-bottles-fix.sh — 修复 MCStudio（或其他 .NET/WPF 应用）在 Bottles 下打不开
+# 兼容 Arch Linux / CachyOS，保留 Wine-GE
 #
 # 原理（同 Proton 版，去掉 Steam Runtime / shortcuts.vdf 部分）：
 #   1. Bottles bottle 默认带 Wine Mono，WPF 应用会抛
@@ -18,32 +19,26 @@
 #   mcstudio-bottles-fix.sh --check       只诊断当前状态
 #   mcstudio-bottles-fix.sh --install-runner   下载/更新 Wine-GE 运行器
 #   mcstudio-bottles-fix.sh --create-bottle    创建新 Bottle（参考 MCS 配置）
+#   mcstudio-bottles-fix.sh --deps-only   只装全部依赖（.NET 4.8 + VC++）
 #   mcstudio-bottles-fix.sh --fix-rendering    修复渲染黑屏（d3d9=builtin）
-#   mcstudio-bottles-fix.sh --install-fonts    安装中文字体（微软雅黑/宋体/黑体）
 #   mcstudio-bottles-fix.sh --setup-ime        配置输入法（fcitx5/ibus）
 #   mcstudio-bottles-fix.sh --install-nvapi    安装 DXVK-NVAPI（AMD/Intel 兼容）
-#   mcstudio-bottles-fix.sh --deps-only   只装全部依赖（.NET 4.8 + VC++）
 #   mcstudio-bottles-fix.sh --scale 1.5   设置应用缩放倍数
 #   mcstudio-bottles-fix.sh --install-host-deps  安装脚本自身宿主依赖
-#
 set -euo pipefail
-
 # ==================== 配置（按需修改） ====================
 BOTTLES_DATA="${BOTTLES_DATA:-$HOME/.local/share/bottles}"
 BOTTLE_NAME="${BOTTLE_NAME:-MCS}"
 BOTTLE_ARCH="${BOTTLE_ARCH:-win64}"
 BOTTLE_ENV="${BOTTLE_ENV:-gaming}"
 RUNNER_NAME="${RUNNER_NAME:-}"  # 留空则自动检测（优先 wine-ge，其次 soda）
-
 PREFIX="$BOTTLES_DATA/bottles/$BOTTLE_NAME"
 APP_SCALE="${APP_SCALE:-1.5}"
 DEPS_VERBS="${DEPS_VERBS:-dotnet48 vcrun2022 ucrtbase2019}"
 USER_CACHE="${USER_CACHE:-$HOME/.cache}"
-
 # Wine-GE 运行器自动下载配置
 WINE_GE_REPO="${WINE_GE_REPO:-GloriousEggroll/wine-ge-custom}"
-GH_MIRRORS="${GH_MIRRORS:-https://gh-proxy.com https://mirror.ghproxy.com}"
-
+GH_MIRRORS="${GH_MIRRORS:-shturl.cc/CLAWn70JA5 https://mirror.ghproxy.com}"
 # winetricks 官方下载地址与 sha256
 DOTNET40_URL="https://download.microsoft.com/download/9/5/A/95A9616B-7A37-4AF6-BC36-D6EA96C8DAAE/dotNetFx40_Full_x86_x64.exe"
 DOTNET40_SHA="65e064258f2e418816b304f646ff9e87af101e4c9552ab064bb74d281c38659f"
@@ -57,14 +52,11 @@ UCRTBASE2019_X86_URL="https://download.visualstudio.microsoft.com/download/pr/85
 UCRTBASE2019_X86_SHA="14563755ac24a874241935ef2c22c5fce973acb001f99e524145113b2dc638c1"
 UCRTBASE2019_X64_URL="https://download.visualstudio.microsoft.com/download/pr/85d47aa9-69ae-4162-8300-e6b7e4bf3cf3/52B196BBE9016488C735E7B41805B651261FFA5D7AA86EB6A1D0095BE83687B2/VC_redist.x64.exe"
 UCRTBASE2019_X64_SHA="52b196bbe9016488c735e7b41805b651261ffa5d7aa86eb6a1d0095be83687b2"
-
 # ==================== 小工具 ====================
 info()  { printf '\033[1;32m[INFO]\033[0m %s\n' "$*"; }
 warn()  { printf '\033[1;33m[WARN]\033[0m %s\n' "$*"; }
 die()   { printf '\033[1;31m[ERROR]\033[0m %s\n' "$*" >&2; exit 1; }
-
 require() { command -v "$1" >/dev/null 2>&1 || die "缺少工具: $1"; }
-
 # ==================== 自动下载 Wine-GE 运行器 ====================
 has_usable_runner() {
     local runners_dir="$BOTTLES_DATA/runners"
@@ -76,22 +68,18 @@ has_usable_runner() {
     done
     return 1
 }
-
 download_wine_ge() {
     local runners_dir="$BOTTLES_DATA/runners"
     mkdir -p "$runners_dir"
-
     local api_url="https://api.github.com/repos/$WINE_GE_REPO/releases/latest"
     info "查询 Wine-GE 最新版本..."
     local release_info tag_name download_url
     release_info="$(curl -sfL "$api_url" 2>/dev/null)" || die "无法查询 Wine-GE 最新版本（网络问题？）"
-
     tag_name="$(echo "$release_info" | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')"
     download_url="$(echo "$release_info" | grep '"browser_download_url".*\.tar\.xz' | head -1 | sed 's/.*"browser_download_url": *"\([^"]*\)".*/\1/')"
     [ -n "$tag_name" ]    || die "无法解析 Wine-GE 版本号"
     [ -n "$download_url" ] || die "无法解析 Wine-GE 下载链接"
     info "Wine-GE 最新版本: $tag_name"
-
     # 检查是否已安装该版本
     local existing=""
     for r in "$runners_dir"/*/; do
@@ -104,10 +92,8 @@ download_wine_ge() {
         info "版本 $tag_name 已安装: $existing"
         return 0
     fi
-
     local tmp_tar="/tmp/wine-ge-$tag_name.tar.xz"
     info "下载 Wine-GE（约 200+ MB，可能需要几分钟）..."
-
     # 尝试镜像加速，失败则 GitHub 直连
     local mirror ok=0
     for mirror in $GH_MIRRORS; do
@@ -122,11 +108,9 @@ download_wine_ge() {
         info "镜像下载失败，尝试 GitHub 直连..."
         curl -fL --progress-bar -o "$tmp_tar" "$download_url" || { rm -f "$tmp_tar"; die "Wine-GE 下载失败，请手动下载: $download_url"; }
     fi
-
     info "解压到 $runners_dir ..."
     tar xf "$tmp_tar" -C "$runners_dir" || { rm -f "$tmp_tar"; die "解压失败"; }
     rm -f "$tmp_tar"
-
     # 检测解压后的目录名
     local found=""
     for r in "$runners_dir"/*/; do
@@ -142,7 +126,6 @@ download_wine_ge() {
     [ -n "$found" ] || die "解压后未找到有效的 wine 可执行文件"
     info "Wine-GE 安装成功: $found"
 }
-
 ensure_runner() {
     if has_usable_runner; then
         return 0
@@ -150,18 +133,15 @@ ensure_runner() {
     warn "Bottles runners 目录下没有可用运行器"
     download_wine_ge
 }
-
 # ==================== 检测 Bottles 运行器 ====================
 detect_runner() {
     local runners_dir="$BOTTLES_DATA/runners"
     [ -d "$runners_dir" ] || die "找不到 Bottles runners 目录: $runners_dir"
-
     # 如果指定了运行器，直接用
     if [ -n "$RUNNER_NAME" ] && [ -x "$runners_dir/$RUNNER_NAME/bin/wine" ]; then
         RUNNER_PATH="$runners_dir/$RUNNER_NAME"
         return 0
     fi
-
     # 优先 wine-ge，其次 soda，最后任意可用的
     local r=""
     for r in "$runners_dir"/*/; do
@@ -186,7 +166,6 @@ detect_runner() {
     done
     die "Bottles runners 目录下没有可用的运行器"
 }
-
 WINE_BIN=""
 WINE_SERVER=""
 setup_wine_paths() {
@@ -199,8 +178,7 @@ setup_wine_paths() {
     info "使用运行器: $RUNNER_NAME"
     info "Wine: $WINE_BIN"
 }
-
-# ==================== 宿主依赖 ====================
+# ==================== 宿主依赖（兼容 Arch/pacman） ====================
 detect_pkg_manager() {
     if command -v dnf >/dev/null 2>&1; then echo dnf
     elif command -v apt-get >/dev/null 2>&1; then echo apt
@@ -208,17 +186,17 @@ detect_pkg_manager() {
     elif command -v zypper >/dev/null 2>&1; then echo zypper
     fi
 }
-
 install_host_deps() {
     local mgr missing=() pkgs=() t still=()
     mgr="$(detect_pkg_manager)"
     [ -n "$mgr" ] || die "未识别的包管理器，请手动安装: curl cabextract unzip python3 winetricks binutils"
-
-    for t in curl cabextract unzip python3 winetricks strings; do
+    # 检查 python3 或 python（Arch 只有 python）
+    local PYTHON_CMD="python3"
+    command -v python3 >/dev/null 2>&1 || { PYTHON_CMD="python"; command -v python >/dev/null 2>&1 || missing+=("python3"); }
+    for t in curl cabextract unzip winetricks strings; do
         command -v "$t" >/dev/null 2>&1 || missing+=("$t")
     done
     [ ${#missing[@]} -eq 0 ] && { info "宿主依赖齐全"; return 0; }
-
     for t in "${missing[@]}"; do
         case "$t:$mgr" in
             strings:*)          pkgs+=(binutils) ;;
@@ -228,7 +206,6 @@ install_host_deps() {
         esac
     done
     pkgs=($(printf '%s\n' "${pkgs[@]}" | sort -u))
-
     info "安装宿主依赖: ${pkgs[*]}（需要 sudo）"
     case "$mgr" in
         apt)    sudo apt-get update -qq && sudo apt-get install -y "${pkgs[@]}" ;;
@@ -236,22 +213,23 @@ install_host_deps() {
         pacman) sudo pacman -S --noconfirm --needed "${pkgs[@]}" ;;
         zypper) sudo zypper install -y "${pkgs[@]}" ;;
     esac
-
-    for t in curl cabextract unzip python3 winetricks strings; do
+    # 验证——python3 或 python 任一即可
+    for t in curl cabextract unzip winetricks strings; do
         command -v "$t" >/dev/null 2>&1 || still+=("$t")
     done
+    command -v python3 >/dev/null 2>&1 || command -v python >/dev/null 2>&1 || still+=("python3")
     [ ${#still[@]} -eq 0 ] || die "仍有宿主依赖缺失: ${still[*]}"
     info "宿主依赖安装完成"
 }
-
 ensure_host_deps() {
     local missing=()
-    for t in curl cabextract unzip python3 winetricks strings; do
+    # python3 或 python 任一即可（Arch 只有 python）
+    command -v python3 >/dev/null 2>&1 || command -v python >/dev/null 2>&1 || missing+=("python3")
+    for t in curl cabextract unzip winetricks strings; do
         command -v "$t" >/dev/null 2>&1 || missing+=("$t")
     done
     [ ${#missing[@]} -gt 0 ] && { warn "缺少宿主依赖: ${missing[*]}"; install_host_deps; } || info "宿主依赖齐全"
 }
-
 # ==================== 创建 Bottle ====================
 detect_components() {
     local components=""
@@ -261,40 +239,32 @@ detect_components() {
     DETECTED_NVAPI="$(echo "$components" | grep -oE 'dxvk-nvapi-[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
     DETECTED_LFX="$(echo "$components" | grep -oE 'latencyflex-v[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
 }
-
 bottle_exists() {
     [ -f "$BOTTLES_DATA/bottles/$1/bottle.yml" ]
 }
-
 create_bottle() {
     local name="${1:-$BOTTLE_NAME}"
     local arch="${2:-$BOTTLE_ARCH}"
     local env="${3:-$BOTTLE_ENV}"
     require bottles-cli
-
     if bottle_exists "$name"; then
         info "Bottle '$name' 已存在"
         return 0
     fi
-
     setup_wine_paths  # 确保 runner 已检测/下载
     detect_components
-
     local args=(--bottle-name "$name" --environment "$env" --arch "$arch" --runner "$RUNNER_NAME")
     [ -n "$DETECTED_DXVK" ] && args+=(--dxvk "$DETECTED_DXVK")
     [ -n "$DETECTED_VKD3D" ] && args+=(--vkd3d "$DETECTED_VKD3D")
     # 不传 --nvapi：bottles-cli 会自动从 GitHub 下载，国内网络不通会反复重试失败
     # NVAPI 由 install_nvapi 函数后续安装（有镜像加速）
     [ -n "$DETECTED_LFX" ] && args+=(--latencyflex "$DETECTED_LFX")
-
     info "创建 bottle: $name（环境: $env, 架构: $arch, 运行器: $RUNNER_NAME）"
     info "  DXVK=${DETECTED_DXVK:-无}  VKD3D=${DETECTED_VKD3D:-无}  NVAPI=${DETECTED_NVAPI:-无}  LatencyFleX=${DETECTED_LFX:-无}"
-
     # bottles-cli 可能需要 Bottles 后台服务运行，超时设宽松一点
     if ! timeout 180 bottles-cli new "${args[@]}" 2>&1; then
         die "创建 bottle 失败（bottles-cli new 返回非零）"
     fi
-
     # 等待 bottle.yml 生成（bottles-cli 是异步的）
     local i=""
     for i in $(seq 1 60); do
@@ -302,34 +272,28 @@ create_bottle() {
         sleep 2
     done
     bottle_exists "$name" || die "bottle 创建超时（120s），请检查 Bottles 是否正在运行"
-
     info "Bottle '$name' 创建成功"
-
     # 关闭沙盒（参考 MCS 配置，避免 /tmp 只读问题）
     local btl_yml="$BOTTLES_DATA/bottles/$name/bottle.yml"
     if grep -q 'sandbox: true' "$btl_yml" 2>/dev/null; then
         info "关闭沙盒（避免 wineserver /tmp 只读问题）"
         sed -i 's/sandbox: true/sandbox: false/' "$btl_yml"
     fi
-
     # 清理 NVAPI 配置行，防止 Bottles 自动从 GitHub 下载（国内网络不通）
     # NVAPI 由 install_nvapi 函数后续安装（有镜像加速）
     if grep -q '^NVAPI:' "$btl_yml" 2>/dev/null; then
         info "清理 bottle.yml 里的 NVAPI 配置（防止 Bottles 自动下载）"
         sed -i '/^NVAPI:/d' "$btl_yml"
     fi
-
     # 更新全局 PREFIX 指向新创建的 bottle
     PREFIX="$BOTTLES_DATA/bottles/$name"
 }
-
 # ==================== 运行 wine 命令 ====================
 run_wine() {
     [ -n "$WINE_BIN" ] || setup_wine_paths
     WINEPREFIX="$PREFIX" WINE="$WINE_BIN" WINESERVER="$WINE_SERVER" WINELOADER="$WINE_BIN" \
         "$WINE_BIN" "$@"
 }
-
 run_winetricks() {
     [ -n "$WINE_BIN" ] || setup_wine_paths
     require winetricks
@@ -338,7 +302,6 @@ run_winetricks() {
         WINETRICKS_DOWNLOADER=curl WINEDEBUG=fixme-all \
         winetricks "$@"
 }
-
 # ==================== 预下载安装包 ====================
 download_if_missing() {
     local file="$1" url="$2" sha="$3"
@@ -352,13 +315,11 @@ download_if_missing() {
         rm -f "$file"; warn "校验失败: $file（交给 winetricks 重新下载）"
     fi
 }
-
 # ==================== 安装依赖 ====================
 install_deps() {
     [ -d "$PREFIX" ] || die "Bottle 前缀不存在: $PREFIX（请先在 Bottles 里创建 bottle: $BOTTLE_NAME）"
     setup_wine_paths
     ensure_host_deps
-
     local cache="$USER_CACHE/winetricks"
     download_if_missing "$cache/dotnet40/dotNetFx40_Full_x86_x64.exe" "$DOTNET40_URL" "$DOTNET40_SHA"
     download_if_missing "$cache/dotnet48/ndp48-x86-x64-allos-enu.exe" "$DOTNET48_URL" "$DOTNET48_SHA"
@@ -366,39 +327,31 @@ install_deps() {
     download_if_missing "$cache/vcrun2022/vc_redist.x64.exe" "$VCRUN2022_X64_URL" "$VCRUN2022_X64_SHA"
     download_if_missing "$cache/ucrtbase2019/vc_redist.x86.exe" "$UCRTBASE2019_X86_URL" "$UCRTBASE2019_X86_SHA"
     download_if_missing "$cache/ucrtbase2019/vc_redist.x64.exe" "$UCRTBASE2019_X64_URL" "$UCRTBASE2019_X64_SHA"
-
     info "开始安装依赖到 $PREFIX: $DEPS_VERBS（约 10-25 分钟）"
     info "步骤 1/3: 移除 Wine Mono（必须先做，否则 .NET 4.8 安装器会误判已安装）"
     run_winetricks -q remove_mono || warn "remove_mono 未完全成功（可能本来就没装）"
-
     info "步骤 2/3: 安装 .NET Framework 4.8 + VC++ 运行库"
     run_winetricks -q $DEPS_VERBS
-
     info "步骤 3/3: 安装完成"
 }
-
 # ==================== 验证 ====================
 verify_dotnet() {
     local reg="$PREFIX/system.reg"
     local mscorlib="$PREFIX/drive_c/windows/Microsoft.NET/Framework64/v4.0.30319/mscorlib.dll"
     local ok=1
-
     if grep -a -q '"Version"="4\.8\.' "$reg" 2>/dev/null; then
         info "注册表: .NET 4.8 已注册"
     else
         warn "注册表里没有 .NET 4.8 Version"; ok=0
     fi
-
     if [ -f "$mscorlib" ] && [ "$(stat -c%s "$mscorlib")" -gt 4000000 ]; then
         info "mscorlib.dll: $(stat -c%s "$mscorlib") 字节（微软原版）"
     else
         local sz=0; [ -f "$mscorlib" ] && sz=$(stat -c%s "$mscorlib")
         warn "mscorlib.dll: ${sz} 字节（应 >4MB 才是微软原版，当前可能是 Wine Mono）"; ok=0
     fi
-
     [ "$ok" -eq 1 ] || die ".NET 4.8 验证未通过"
 }
-
 verify_deps() {
     verify_dotnet
     if grep -a -q 'Microsoft Visual C++' "$PREFIX/system.reg" 2>/dev/null; then
@@ -407,7 +360,6 @@ verify_deps() {
         warn "未检测到 VC++ 运行库注册"
     fi
 }
-
 # ==================== 应用缩放 ====================
 set_app_scale() {
     local scale="$APP_SCALE" logpixels
@@ -421,7 +373,6 @@ set_app_scale() {
     run_wine reg add 'HKCU\Control Panel\Desktop' /v LogPixels /t REG_DWORD /d "$logpixels" /f
     info "缩放设置已写入（下次启动生效）"
 }
-
 # ==================== 修复渲染黑屏 ====================
 # 问题：WPF 应用（如 MCStudio）在 DXVK 下 D3D9 渲染黑屏
 # 原因：DXVK 对 WPF 的 D3D9 UI 合成支持不佳
@@ -429,30 +380,23 @@ set_app_scale() {
 fix_rendering() {
     [ -d "$PREFIX" ] || die "Bottle 前缀不存在: $PREFIX"
     setup_wine_paths
-
     local user_reg="$PREFIX/user.reg"
     [ -f "$user_reg" ] || die "找不到 user.reg: $user_reg"
-
     info "修复渲染黑屏（WPF + DXVK 兼容性）"
-
     # 1. 设置 d3d9=builtin（WPF 的 D3D9 走 wined3d，不黑屏）
     info "步骤 1/3: 设置 d3d9=builtin（WPF 走 wined3d/OpenGL）"
     run_wine reg add "HKCU\Software\Wine\DllOverrides" /v d3d9 /t REG_SZ /d builtin /f 2>&1 | grep -v 'fixme\|err:fsync' || true
-
     # 2. 确保 WPF 硬件加速未被禁用
     info "步骤 2/3: 恢复 WPF 硬件加速"
     run_wine reg delete "HKCU\SOFTWARE\Microsoft\Avalon.Graphics" /v DisableHWAcceleration /f 2>&1 | grep -v 'fixme\|err:fsync' || true
-
     # 3. 清理 wineserver 让注册表写入磁盘
     info "步骤 3/3: 清理 wineserver"
     "$WINE_SERVER" -k 2>/dev/null || true
     sleep 2
-
     # 验证
     local d3d9_val hw_val
     d3d9_val="$(grep '"d3d9"' "$user_reg" 2>/dev/null | head -1 || true)"
     hw_val="$(grep 'DisableHWAcceleration' "$user_reg" 2>/dev/null | head -1 || true)"
-
     echo
     echo "===== 验证结果 ====="
     if echo "$d3d9_val" | grep -q 'builtin'; then
@@ -460,210 +404,23 @@ fix_rendering() {
     else
         warn "✗ d3d9 覆盖未生效: ${d3d9_val:-未找到}"
     fi
-
     if [ -z "$hw_val" ]; then
         info "✓ WPF 硬件加速: 已恢复（无 DisableHWAcceleration）"
     else
         warn "✗ WPF 硬件加速仍被禁用: $hw_val"
     fi
-
     echo
     info "渲染修复完成。重启 MCStudio 测试。"
     echo "  WPF UI (D3D9)  → wined3d/OpenGL（兼容好，不黑屏）"
     echo "  游戏 D3D10/11  → DXVK/Vulkan（硬件加速）"
     echo "  游戏 D3D9      → wined3d/OpenGL（有加速，稍慢于 DXVK）"
 }
-
-# ==================== 安装中文字体 ====================
-# 问题：Wine 前缀只有英文字体，中文显示为方块/乱码（口口口）
-# 方案：三层映射 — 原始文件名 + fontconfig 别名 + Wine 注册表别名
-install_fonts() {
-    [ -d "$PREFIX" ] || die "Bottle 前缀不存在: $PREFIX"
-
-    local fonts_dir="$PREFIX/drive_c/windows/Fonts"
-    mkdir -p "$fonts_dir" 2>/dev/null || true
-
-    info "安装中文字体到 Wine 前缀（三层映射）"
-
-    # 源字体路径
-    local noto_sans="/usr/share/fonts/google-noto-sans-cjk-fonts"
-    local noto_serif="/usr/share/fonts/google-noto-serif-cjk-fonts"
-    local wqy="/usr/share/fonts/wqy-microhei-fonts/wqy-microhei.ttc"
-    local ukai="/usr/share/fonts/cjkuni-ukai-fonts/ukai.ttc"
-
-    # 步骤 1：复制原始文件名（不改名，Wine 按内部字体名注册）
-    info "步骤 1/5: 复制中文字体（保留原始文件名）"
-    local copied=0
-    [ -f "$noto_sans/NotoSansCJK-Regular.ttc" ] && cp "$noto_sans/NotoSansCJK-Regular.ttc" "$fonts_dir/" && copied=$((copied+1)) && echo "  ✓ NotoSansCJK-Regular.ttc"
-    [ -f "$noto_sans/NotoSansCJK-Bold.ttc" ] && cp "$noto_sans/NotoSansCJK-Bold.ttc" "$fonts_dir/" && echo "  ✓ NotoSansCJK-Bold.ttc"
-    [ -f "$noto_serif/NotoSerifCJK-Regular.ttc" ] && cp "$noto_serif/NotoSerifCJK-Regular.ttc" "$fonts_dir/" && copied=$((copied+1)) && echo "  ✓ NotoSerifCJK-Regular.ttc"
-    [ -f "$wqy" ] && cp "$wqy" "$fonts_dir/" && echo "  ✓ wqy-microhei.ttc"
-    [ -f "$ukai" ] && cp "$ukai" "$fonts_dir/" && echo "  ✓ ukai.ttc"
-
-    [ "$copied" -eq 0 ] && warn "未找到系统中文字体，请先安装: dnf install google-noto-sans-cjk-fonts google-noto-serif-cjk-fonts wqy-microhei-fonts cjkuni-ukai-fonts"
-
-    # 步骤 2：设置 fontconfig 别名（系统级，Wine 通过 fontconfig 查找字体）
-    info "步骤 2/5: 设置 fontconfig 别名"
-    mkdir -p ~/.config/fontconfig
-    cat > ~/.config/fontconfig/fonts.conf << 'FONTEOF'
-<?xml version="1.0"?>
-<!DOCTYPE fontconfig SYSTEM "fonts.dtd">
-<fontconfig>
-  <match target="pattern"><test name="family"><string>Microsoft YaHei</string></test><edit name="family" mode="assign" binding="strong"><string>Noto Sans CJK SC</string></edit></match>
-  <match target="pattern"><test name="family"><string>Microsoft YaHei UI</string></test><edit name="family" mode="assign" binding="strong"><string>Noto Sans CJK SC</string></edit></match>
-  <match target="pattern"><test name="family"><string>微软雅黑</string></test><edit name="family" mode="assign" binding="strong"><string>Noto Sans CJK SC</string></edit></match>
-  <match target="pattern"><test name="family"><string>SimSun</string></test><edit name="family" mode="assign" binding="strong"><string>Noto Serif CJK SC</string></edit></match>
-  <match target="pattern"><test name="family"><string>NSimSun</string></test><edit name="family" mode="assign" binding="strong"><string>Noto Serif CJK SC</string></edit></match>
-  <match target="pattern"><test name="family"><string>宋体</string></test><edit name="family" mode="assign" binding="strong"><string>Noto Serif CJK SC</string></edit></match>
-  <match target="pattern"><test name="family"><string>SimHei</string></test><edit name="family" mode="assign" binding="strong"><string>WenQuanYi Micro Hei</string></edit></match>
-  <match target="pattern"><test name="family"><string>黑体</string></test><edit name="family" mode="assign" binding="strong"><string>WenQuanYi Micro Hei</string></edit></match>
-  <match target="pattern"><test name="family"><string>KaiTi</string></test><edit name="family" mode="assign" binding="strong"><string>AR PL UKai CN</string></edit></match>
-  <match target="pattern"><test name="family"><string>楷体</string></test><edit name="family" mode="assign" binding="strong"><string>AR PL UKai CN</string></edit></match>
-  <match target="pattern"><test name="family"><string>FangSong</string></test><edit name="family" mode="assign" binding="strong"><string>Noto Serif CJK SC</string></edit></match>
-  <match target="pattern"><test name="family"><string>仿宋</string></test><edit name="family" mode="assign" binding="strong"><string>Noto Serif CJK SC</string></edit></match>
-</fontconfig>
-FONTEOF
-    echo "  ✓ fontconfig 别名 → ~/.config/fontconfig/fonts.conf"
-
-    # 刷新 fontconfig 缓存
-    fc-cache -f 2>/dev/null || true
-
-    # 步骤 3：设置 Wine 注册表字体别名（HKCU + HKLM）
-    info "步骤 3/5: 设置 Wine 注册表字体别名（HKCU + HKLM）"
-    local subs=(
-        "Microsoft YaHei:Noto Sans CJK SC"
-        "Microsoft YaHei UI:Noto Sans CJK SC"
-        "SimSun:Noto Serif CJK SC"
-        "SimHei:WenQuanYi Micro Hei"
-        "NSimSun:Noto Serif CJK SC"
-        "KaiTi:AR PL UKai CN"
-        "FangSong:Noto Serif CJK SC"
-        "Microsoft JhengHei:Noto Sans CJK TC"
-    )
-    for sub in "${subs[@]}"; do
-        local key="${sub%%:*}" val="${sub##*:}"
-        run_wine reg add "HKCU\\Software\\Wine\\Font Substitutes" /v "$key" /t REG_SZ /d "$val" /f 2>&1 | grep -v 'fixme\|err:' || true
-        run_wine reg add "HKLM\\Software\\Microsoft\\Windows NT\\CurrentVersion\\FontSubstitutes" /v "$key" /t REG_SZ /d "$val" /f 2>&1 | grep -v 'fixme\|err:' || true
-    done
-
-    # 步骤 4：在 HKLM 注册字体（C 盘路径，不依赖 Z 盘）
-    info "步骤 4/5: 在 HKLM 注册字体（C 盘路径）"
-    local font_regs=(
-        "Noto Sans CJK SC (TrueType):NotoSansCJK-Regular.ttc"
-        "Noto Sans CJK SC Bold (TrueType):NotoSansCJK-Bold.ttc"
-        "Noto Serif CJK SC (TrueType):NotoSerifCJK-Regular.ttc"
-        "WenQuanYi Micro Hei (TrueType):wqy-microhei.ttc"
-        "AR PL UKai CN (TrueType):ukai.ttc"
-    )
-    for fr in "${font_regs[@]}"; do
-        local fname="${fr%%:*}" ffile="${fr##*:}"
-        run_wine reg add "HKLM\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Fonts" /v "$fname" /t REG_SZ /d "C:\\windows\\Fonts\\$ffile" /f 2>&1 | grep -v 'fixme\|err:' || true
-    done
-
-    # 步骤 5：用 fonttools 创建改名字体（DirectWrite 直接查找，解决"口口口"）
-    info "步骤 5/5: 用 fonttools 创建改名字体（DirectWrite 兼容）"
-    if command -v uv >/dev/null 2>&1; then
-        local wqy_src="/usr/share/fonts/wqy-microhei-fonts/wqy-microhei.ttc"
-        local noto_serif_src="/usr/share/fonts/google-noto-serif-cjk-fonts/NotoSerifCJK-Regular.ttc"
-        local wqy_zenhei_src="/usr/share/fonts/wqy-zenhei-fonts/wqy-zenhei.ttc"
-
-        # 查找实际路径（兼容不同发行版）
-        [ -f "$wqy_src" ] || wqy_src=$(fc-list | grep -i 'wqy-microhei.ttc' | head -1 | cut -d: -f1)
-        [ -f "$noto_serif_src" ] || noto_serif_src=$(fc-list | grep -i 'NotoSerifCJK-Regular.ttc' | head -1 | cut -d: -f1)
-        [ -f "$wqy_zenhei_src" ] || wqy_zenhei_src=$(fc-list | grep -i 'wqy-zenhei.ttc' | head -1 | cut -d: -f1)
-
-        uv run --with fonttools python3 << PYEOF 2>/dev/null || warn "fonttools 创建改名字体失败"
-from fontTools.ttLib import TTCollection
-import os
-
-dst_dir = "$fonts_dir"
-fonts = [
-    ("$wqy_src", "Microsoft YaHei", "msyh.ttc"),
-    ("$wqy_src", "Microsoft YaHei UI", "msyhl.ttc"),
-    ("$noto_serif_src", "SimSun", "simsun.ttc"),
-    ("$wqy_src", "SimHei", "simhei.ttf"),
-    ("$wqy_zenhei_src", "KaiTi", "simkai.ttf"),
-]
-
-for src, name, out in fonts:
-    if not os.path.isfile(src):
-        print(f"  跳过: {out}（源文件不存在: {src}）")
-        continue
-    out_path = os.path.join(dst_dir, out)
-    ttc = TTCollection(src)
-    for font in ttc.fonts:
-        nt = font['name']
-        for nameID in [1, 4, 6]:
-            nt.setName(name, nameID, 3, 1, 0x409)
-            nt.setName(name, nameID, 3, 1, 0x804)
-        nt.setName("Regular", 2, 3, 1, 0x409)
-    ttc.save(out_path)
-    print(f"  ✓ {out} ({os.path.getsize(out_path)//1024} KB) - 内部名: {name}")
-PYEOF
-
-        # 注册改名字体到 HKLM Fonts
-        local renamed_fonts=(
-            "Microsoft YaHei (TrueType):msyh.ttc"
-            "Microsoft YaHei UI (TrueType):msyhl.ttc"
-            "SimSun (TrueType):simsun.ttc"
-            "SimHei (TrueType):simhei.ttf"
-            "KaiTi (TrueType):simkai.ttf"
-        )
-        for rf in "${renamed_fonts[@]}"; do
-            local rfname="${rf%%:*}" rffile="${rf##*:}"
-            [ -f "$fonts_dir/$rffile" ] && run_wine reg add "HKLM\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Fonts" /v "$rfname" /t REG_SZ /d "C:\\windows\\Fonts\\$rffile" /f 2>&1 | grep -v 'fixme\|err:' || true
-        done
-        echo "  ✓ 改名字体已注册到 HKLM Fonts"
-    else
-        warn "uv 未安装，跳过改名字体创建（DirectWrite 可能仍显示口口口）"
-        warn "安装 uv: sudo dnf install uv"
-    fi
-
-    # 清理
-    "$WINE_SERVER" -k 2>/dev/null || true
-    sleep 1
-
-    # 验证
-    echo
-    echo "===== 验证结果 ====="
-    local cnt=0
-    for f in NotoSansCJK-Regular.ttc NotoSansCJK-Bold.ttc NotoSerifCJK-Regular.ttc wqy-microhei.ttc ukai.ttc; do
-        [ -f "$fonts_dir/$f" ] && cnt=$((cnt+1))
-    done
-    info "中文字体文件: $cnt/5 已安装"
-    [ -f ~/.config/fontconfig/fonts.conf ] && info "✓ fontconfig 别名已设置" || warn "✗ fontconfig 别名缺失"
-    grep -q 'Font Substitutes' "$PREFIX/user.reg" 2>/dev/null && info "✓ Wine 注册表别名已设置" || warn "✗ Wine 注册表别名缺失"
-
-    # 改名字体验证（DirectWrite 兼容）
-    local renamed_cnt=0
-    for f in msyh.ttc msyhl.ttc simsun.ttc simhei.ttf simkai.ttf; do
-        [ -f "$fonts_dir/$f" ] && renamed_cnt=$((renamed_cnt+1))
-    done
-    if [ "$renamed_cnt" -gt 0 ]; then
-        info "✓ 改名字体（DirectWrite 兼容）: $renamed_cnt/5 已创建"
-        grep -qa 'msyh.ttc' "$PREFIX/system.reg" 2>/dev/null && info "✓ 改名字体已注册到 HKLM Fonts" || warn "✗ 改名字体未注册到 HKLM"
-    else
-        warn "✗ 改名字体未创建（需要 uv + fonttools）"
-    fi
-
-    # fc-match 验证
-    echo
-    echo "  fc-match 验证:"
-    echo "    Microsoft YaHei → $(fc-match 'Microsoft YaHei' 2>/dev/null | sed 's/:.*//')"
-    echo "    SimSun          → $(fc-match 'SimSun' 2>/dev/null | sed 's/:.*//')"
-    echo "    SimHei          → $(fc-match 'SimHei' 2>/dev/null | sed 's/:.*//')"
-    echo
-    info "字体安装完成（五层映射 + DirectWrite 兼容）。重启 MCStudio 后中文应正常显示。"
-}
-
 # ==================== 配置输入法 ====================
 # 问题：Wine 应用无法输入中文（fcitx5/ibus 不工作）
 # 方案：在 bottle.yml 设置 IM 环境变量
 setup_input_method() {
     [ -d "$PREFIX" ] || die "Bottle 前缀不存在: $PREFIX"
-
     info "配置输入法环境变量"
-
     # 检测系统输入法
     local im_module="fcitx"
     if pgrep -x fcitx5 >/dev/null 2>&1; then
@@ -678,26 +435,24 @@ setup_input_method() {
     else
         warn "未检测到运行中的输入法（fcitx5/ibus），将默认使用 fcitx"
     fi
-
     # 更新 bottle.yml 的 Environment_Variables
     local bottle_yml="${BOTTLES_DATA}/bottles/${BOTTLE_NAME}/bottle.yml"
     [ -f "$bottle_yml" ] || die "找不到 bottle.yml: $bottle_yml"
-
+    # 检测可用的 Python 命令（Arch 只有 python）
+    local PYTHON_CMD="python3"
+    command -v python3 >/dev/null 2>&1 || PYTHON_CMD="python"
     info "写入环境变量到 bottle.yml"
     # 用 Python 安全编辑 YAML
-    python3 - "$bottle_yml" "$im_module" << 'PYEOF' || die "更新 bottle.yml 失败"
+    $PYTHON_CMD - "$bottle_yml" "$im_module" << 'PYEOF' || die "更新 bottle.yml 失败"
 import sys, re
-
 path, im = sys.argv[1], sys.argv[2]
 with open(path, 'r') as f:
     content = f.read()
-
 # 替换 Environment_Variables 段
 new_env = f"""Environment_Variables:
     GTK_IM_MODULE: {im}
     QT_IM_MODULE: {im}
     XMODIFIERS: '@im={im}'"""
-
 # 匹配 Environment_Variables: {} 或多行格式
 content = re.sub(
     r'Environment_Variables:\s*\{?\s*\}?\s*\n(\s+[\w]+:\s*[^\n]+\n)*',
@@ -705,7 +460,6 @@ content = re.sub(
     content,
     count=1
 )
-
 # 如果没匹配到（可能是多行带缩进的格式），尝试另一种匹配
 if 'GTK_IM_MODULE' not in content:
     content = re.sub(
@@ -714,20 +468,16 @@ if 'GTK_IM_MODULE' not in content:
         content,
         count=1
     )
-
 # 如果还是没有，直接替换 {} 格式
 if 'GTK_IM_MODULE' not in content:
     content = content.replace('Environment_Variables: {}', new_env)
-
 with open(path, 'w') as f:
     f.write(content)
 print(f"✓ 已设置 GTK_IM_MODULE={im}, QT_IM_MODULE={im}, XMODIFIERS=@im={im}")
 PYEOF
-
     # 清理 wineserver
     "$WINE_SERVER" -k 2>/dev/null || true
     sleep 1
-
     # 验证
     echo
     echo "===== 验证结果 ====="
@@ -740,21 +490,17 @@ PYEOF
     echo
     info "输入法配置完成。重启 Bottles + MCStudio 后可输入中文。"
 }
-
 # ==================== 安装 DXVK-NVAPI ====================
 # 问题：AMD/Intel 显卡报 "no nvapi found"
 # 方案：安装 DXVK-NVAPI，让非 NVIDIA 显卡模拟 NVAPI 接口
 install_nvapi() {
     [ -d "$PREFIX" ] || die "Bottle 前缀不存在: $PREFIX"
     setup_wine_paths
-
     local sys32="$PREFIX/drive_c/windows/system32"
     local syswow64="$PREFIX/drive_c/windows/syswow64"
     local nvapi_version="v0.9.0"
     local nvapi_url="https://github.com/jp7677/dxvk-nvapi/releases/download/${nvapi_version}/dxvk-nvapi-${nvapi_version}.tar.gz"
-
     info "安装 DXVK-NVAPI ${nvapi_version}（AMD/Intel 兼容）"
-
     # 步骤 0：确保 bottle.yml 启用 dxvk_nvapi + dxvk（DXVK-NVAPI 依赖 DXVK 运行）
     # 无论 DLL 是否已安装都执行，保证配置正确
     local bottle_yml="${BOTTLES_DATA}/bottles/${BOTTLE_NAME}/bottle.yml"
@@ -771,19 +517,17 @@ install_nvapi() {
         fi
         [ "$bottle_yml_changed" -eq 1 ] && info "bottle.yml 已更新（dxvk + dxvk_nvapi 已启用）"
     fi
-
     # 检查是否已安装
     if [ -f "$sys32/nvapi64.dll" ]; then
         info "DXVK-NVAPI 已安装，跳过"
         return 0
     fi
-
     # 下载
     local tmpdir
     tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/nvapi-XXXXXX")" || die "无法创建临时目录"
     info "下载 DXVK-NVAPI..."
     local mirror=""
-    for m in "https://gh-proxy.com/" "https://mirror.ghproxy.com/" ""; do
+    for m in "shturl.cc/CLAWn70JA5/" "https://mirror.ghproxy.com/" ""; do
         mirror="$m"
         if curl -L --fail --connect-timeout 15 -o "$tmpdir/dxvk-nvapi.tar.gz" "${m}${nvapi_url}" 2>/dev/null; then
             info "下载成功（${m:+镜像 $m}）"
@@ -792,28 +536,23 @@ install_nvapi() {
         mirror=""
     done
     [ -f "$tmpdir/dxvk-nvapi.tar.gz" ] || die "下载失败"
-
     # 解压
     tar xzf "$tmpdir/dxvk-nvapi.tar.gz" -C "$tmpdir" 2>/dev/null || die "解压失败"
     local extracted_dir="$tmpdir"
     [ -d "$tmpdir/dxvk-nvapi-${nvapi_version}" ] && extracted_dir="$tmpdir/dxvk-nvapi-${nvapi_version}"
-
     # 复制 DLL
     info "步骤 1/3: 复制 NVAPI DLL"
     cp "$extracted_dir/x64/nvapi64.dll" "$sys32/" && echo "  ✓ nvapi64.dll → system32"
     cp "$extracted_dir/x64/nvofapi64.dll" "$sys32/" 2>/dev/null && echo "  ✓ nvofapi64.dll → system32"
     cp "$extracted_dir/x32/nvapi.dll" "$syswow64/" && echo "  ✓ nvapi.dll → syswow64"
-
     # 设置 DLL 覆盖
     info "步骤 2/3: 设置 DLL 覆盖"
     run_wine reg add "HKCU\\Software\\Wine\\DllOverrides" /v nvapi64 /t REG_SZ /d builtin /f 2>&1 | grep -v 'fixme\|err:' || true
     run_wine reg add "HKCU\\Software\\Wine\\DllOverrides" /v nvapi /t REG_SZ /d builtin /f 2>&1 | grep -v 'fixme\|err:' || true
-
     # 清理
     "$WINE_SERVER" -k 2>/dev/null || true
     sleep 1
     rm -rf "$tmpdir" 2>/dev/null || true
-
     # 验证
     echo
     echo "===== 验证结果 ====="
@@ -825,14 +564,12 @@ install_nvapi() {
     echo
     info "DXVK-NVAPI 安装完成。'no nvapi found' 警告应消失。"
 }
-
 # ==================== 诊断 ====================
 cmd_check() {
     echo "===== Bottles 环境 ====="
     echo "Bottle: $BOTTLE_NAME"
     [ -d "$PREFIX" ] && echo "前缀: $PREFIX OK" || { echo "前缀: 不存在 -> $PREFIX"; return; }
     setup_wine_paths 2>/dev/null && echo "运行器: $RUNNER_NAME OK" || echo "运行器: 未检测到"
-
     echo
     echo "===== .NET Framework ====="
     if grep -a -q '"Version"="4\.8\.' "$PREFIX/system.reg" 2>/dev/null; then
@@ -853,7 +590,6 @@ cmd_check() {
     else
         echo "mscorlib.dll: 不存在"
     fi
-
     echo
     echo "===== VC++ 运行库 ====="
     if grep -a -q 'Microsoft Visual C++' "$PREFIX/system.reg" 2>/dev/null; then
@@ -861,7 +597,6 @@ cmd_check() {
     else
         echo "VC++: 未安装"
     fi
-
     echo
     echo "===== 应用缩放 ====="
     local scale_val logpix_val
@@ -869,7 +604,6 @@ cmd_check() {
     logpix_val="$(grep -a '"LogPixels"=' "$PREFIX/user.reg" 2>/dev/null | head -1 || true)"
     [ -n "$scale_val" ] && echo "$scale_val" || echo "DpiScaling: 未设置（默认 1x）"
     [ -n "$logpix_val" ] && echo "$logpix_val" || echo "LogPixels: 未设置（默认 96）"
-
     echo
     echo "===== 渲染配置 ====="
     local d3d9_val hw_val dxvk_val
@@ -884,19 +618,6 @@ cmd_check() {
     fi
     [ -n "$hw_val" ] && echo "WPF 硬件加速: 已禁用 ($hw_val)" || echo "WPF 硬件加速: 已启用"
     [ -n "$dxvk_val" ] && echo "DXVK: $dxvk_val" || echo "DXVK: 状态未知"
-
-    echo
-    echo "===== 中文字体 ====="
-    local fonts_dir="$PREFIX/drive_c/windows/Fonts"
-    local font_cnt=0
-    for f in NotoSansCJK-Regular.ttc NotoSansCJK-Bold.ttc NotoSerifCJK-Regular.ttc wqy-microhei.ttc ukai.ttc; do
-        [ -f "$fonts_dir/$f" ] && font_cnt=$((font_cnt+1))
-    done
-    echo "中文字体文件: $font_cnt/5"
-    [ -f ~/.config/fontconfig/fonts.conf ] && echo "fontconfig 别名: 已设置" || echo "fontconfig 别名: 未设置"
-    grep -q 'Font Substitutes' "$PREFIX/user.reg" 2>/dev/null && echo "Wine 注册表别名: 已设置" || echo "Wine 注册表别名: 未设置"
-    command -v fc-match >/dev/null 2>&1 && echo "  Microsoft YaHei → $(fc-match 'Microsoft YaHei' 2>/dev/null | sed 's/:.*//')" || true
-
     echo
     echo "===== 输入法 ====="
     local bottle_yml="${BOTTLES_DATA}/bottles/${BOTTLE_NAME}/bottle.yml"
@@ -905,24 +626,19 @@ cmd_check() {
     else
         echo "输入法环境变量: 未设置"
     fi
-
     echo
     echo "===== NVAPI（AMD/Intel 兼容）====="
     [ -f "$PREFIX/drive_c/windows/system32/nvapi64.dll" ] && echo "nvapi64.dll: 已安装" || echo "nvapi64.dll: 未安装"
     grep -q '"nvapi64"="builtin"' "$PREFIX/user.reg" 2>/dev/null && echo "DLL 覆盖: 已设置" || echo "DLL 覆盖: 未设置"
     grep -q 'dxvk_nvapi: true' "$bottle_yml" 2>/dev/null && echo "bottle.yml: dxvk_nvapi 已启用" || echo "bottle.yml: dxvk_nvapi 未启用"
-    grep -q 'dxvk: true' "$bottle_yml" 2>/dev/null && echo "bottle.yml: dxvk 已启用" || echo "bottle.yml: dxvk 未启用（NVAPI 无法工作）"
-
+    grep -q 'dxvk: true' "$bottle_yml" 2>/dev/null && echo "bottle.yml: dxvk 已启用（NVAPI 无法工作）" || echo "bottle.yml: dxvk 未启用"
     echo
     echo "===== 已安装的 Bottles 依赖 ====="
     grep -a 'Installed_Dependencies' "$BOTTLES_DATA/bottles/$BOTTLE_NAME/bottle.yml" 2>/dev/null || echo "（无 bottle.yml）"
 }
-
-# ==================== 交互式菜单 ====================
+# ==================== 交互式菜单（移除字体选项，序号顺推） ====================
 usage() { sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; }
-
 pause() { [ -t 0 ] && read -r -p "按回车返回菜单..." || true; }
-
 cmd_menu() {
     local choice=""
     while true; do
@@ -935,14 +651,13 @@ cmd_menu() {
         echo "  3) 安装/更新 Wine-GE 运行器"
         echo "  4) 安装全部依赖（.NET 4.8 + VC++ 运行库）"
         echo "  5) 修复渲染黑屏（WPF + DXVK 兼容性）"
-        echo "  6) 安装中文字体（微软雅黑/宋体/黑体）"
-        echo "  7) 配置输入法（fcitx5/ibus 中文输入）"
-        echo "  8) 安装 DXVK-NVAPI（AMD/Intel 显卡兼容）"
-        echo "  9) 设置应用缩放（当前 ${APP_SCALE}x）"
-        echo " 10) 完整修复（创建Bottle + 运行器 + 依赖 + 渲染 + 字体 + 输入法 + NVAPI + 缩放）"
-        echo " 11) 退出"
+        echo "  6) 配置输入法（fcitx5/ibus 中文输入）"
+        echo "  7) 安装 DXVK-NVAPI（AMD/Intel 显卡兼容）"
+        echo "  8) 设置应用缩放（当前 ${APP_SCALE}x）"
+        echo "  9) 完整修复（创建Bottle + 运行器 + 依赖 + 渲染 + 输入法 + NVAPI + 缩放）"
+        echo " 10) 退出"
         echo
-        read -r -p "请选择 [1-11]: " choice || choice="exit"
+        read -r -p "请选择 [1-10]: " choice || choice="exit"
         case "$choice" in
             1) ( cmd_check ) || warn "诊断失败"; pause ;;
             2) local bname="" barch="" benv=""
@@ -956,28 +671,25 @@ cmd_menu() {
             3) ( download_wine_ge ) || warn "运行器安装失败"; pause ;;
             4) ( install_deps && verify_deps ) || warn "依赖安装失败"; pause ;;
             5) ( fix_rendering ) || warn "渲染修复失败"; pause ;;
-            6) ( install_fonts ) || warn "字体安装失败"; pause ;;
-            7) ( setup_input_method ) || warn "输入法配置失败"; pause ;;
-            8) ( install_nvapi ) || warn "NVAPI 安装失败"; pause ;;
-            9) local newscale oldscale="$APP_SCALE"
+            6) ( setup_input_method ) || warn "输入法配置失败"; pause ;;
+            7) ( install_nvapi ) || warn "NVAPI 安装失败"; pause ;;
+            8) local newscale oldscale="$APP_SCALE"
                 read -r -p "输入缩放倍数 [默认 ${APP_SCALE}]: " newscale || newscale=""
                 [ -n "$newscale" ] && APP_SCALE="$newscale"
                 set_app_scale && pause || APP_SCALE="$oldscale" ;;
-            10) if ( download_wine_ge && create_bottle && install_deps && fix_rendering && install_fonts && setup_input_method && install_nvapi && set_app_scale && verify_deps ); then
+            9) if ( download_wine_ge && create_bottle && install_deps && fix_rendering && setup_input_method && install_nvapi && set_app_scale && verify_deps ); then
                     info "修复完成，现在可以从 Bottles 启动 MCStudio 了。"
                else
                     warn "完整修复未完成"
                fi
                pause ;;
-            11|q|Q|exit) echo "再见。"; return 0 ;;
+            10|q|Q|exit) echo "再见。"; return 0 ;;
             *) echo "无效选择: $choice"; sleep 1 ;;
         esac
     done
 }
-
 # ==================== 主流程 ====================
 [ -d "$BOTTLES_DATA" ] || die "找不到 Bottles 数据目录: $BOTTLES_DATA"
-
 case "${1:-}" in
     --check)        cmd_check ;;
     --menu|-i)      cmd_menu ;;
@@ -988,7 +700,6 @@ case "${1:-}" in
     --install-runner) download_wine_ge ;;
     --create-bottle) create_bottle ;;
     --fix-rendering) fix_rendering ;;
-    --install-fonts) install_fonts ;;
     --setup-ime) setup_input_method ;;
     --install-nvapi) install_nvapi ;;
     --deps-only|--dotnet-only)

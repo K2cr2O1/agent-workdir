@@ -13,3 +13,8 @@ Thumbs.db
 *.log
 *.bak
 *.tmp
+error.txt
+re
+re,glob
+struct
+*.txt
